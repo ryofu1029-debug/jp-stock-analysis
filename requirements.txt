@@ -1,0 +1,10 @@
+streamlit
+pandas
+numpy
+scikit-learn
+statsmodels
+plotly
+yfinance
+requests
+pillow
+xlrd

@@ -1,0 +1,6 @@
+# このPC固有のファイル（Web環境では不要・再生成される）
+data/cacert-combined.pem
+data/failed.txt
+__pycache__/
+*.pyc
+.streamlit/secrets.toml
