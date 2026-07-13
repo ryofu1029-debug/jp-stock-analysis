@@ -37,4 +37,4 @@ if __name__ == "__main__":
     for _, (_, g, _) in TICKERS.items():
         counts[g] = counts.get(g, 0) + 1
     print(f"large: {counts.get('large', 0)}社 / mid: {counts.get('mid', 0)}社 / "
-          f"small: {counts.get('small', 0)}社 / 合計: {len(TICKERS)}社")
+          f"small: {counts.get('small', 0)}社 / us: {counts.get('us', 0)}社 / 合計: {len(TICKERS)}社")

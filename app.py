@@ -188,10 +188,14 @@ def main() -> None:
     # ---- サイドバー: 銘柄選択 ----
     with st.sidebar:
         st.header("銘柄選択")
-        group = st.radio("区分", ["すべて", "大型株(TOPIX100)", "中型株(Mid400)", "小型株"], index=0)
-        group_map = {"大型株(TOPIX100)": "large", "中型株(Mid400)": "mid", "小型株": "small"}
+        group = st.radio("区分", ["すべて", "日本株", "米国株(S&P500)",
+                                  "大型株(TOPIX100)", "中型株(Mid400)", "小型株"], index=0)
+        group_map = {"大型株(TOPIX100)": "large", "中型株(Mid400)": "mid",
+                     "小型株": "small", "米国株(S&P500)": "us"}
         pool = summary
-        if group in group_map:
+        if group == "日本株":
+            pool = summary[summary["group"].isin(["large", "mid", "small"])]
+        elif group in group_map:
             pool = summary[summary["group"] == group_map[group]]
 
         sectors = ["すべて"] + sorted(pool["sector"].unique())
@@ -213,13 +217,16 @@ def main() -> None:
     row = summary[summary["symbol"] == symbol].iloc[0]
 
     # ---- ヘッダー指標 ----
+    def fmt_price(v: float) -> str:  # 日本株は¥・整数、米国株は$・小数2桁
+        return f"¥{v:,.0f}" if symbol.endswith(".T") else f"${v:,.2f}"
+
     st.subheader(f"{name}（{symbol}） — {sector_name}")
     c1, c2, c3, c4, c5 = st.columns(5)
-    c1.metric("終値", f"¥{row['close']:,.0f}", f"データ日: {row['last_date']}", delta_color="off")
+    c1.metric("終値", fmt_price(row["close"]), f"データ日: {row['last_date']}", delta_color="off")
     c2.metric("RSI(14)", f"{row['rsi']:.1f}", row["rsi_label"], delta_color="off")
     c3.metric("MACD", row["macd_label"])
     c4.metric("トレンド(SMA)", row["trend"])
-    c5.metric("来週予測(アンサンブル)", f"¥{row['forecast_1w']:,.0f}", f"{row['forecast_1w_pct']:+.2f}%")
+    c5.metric("来週予測(アンサンブル)", fmt_price(row["forecast_1w"]), f"{row['forecast_1w_pct']:+.2f}%")
 
     # ---- メインチャート（ローソク足 + SMA + BB + 予測）----
     fc = get_forecast(symbol)
