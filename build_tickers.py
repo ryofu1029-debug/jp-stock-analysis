@@ -32,6 +32,12 @@ SIZE_TO_GROUP = {
     "TOPIX Small 1": "small",
 }
 
+# 規模区分の自動選定から漏れるが、個別に追いたい銘柄。
+# 再生成しても残るようにここに置く（(symbol, 企業名, 区分, 33業種区分)）。
+EXTRA = [
+    ("8022.T", "ミズノ", "small", "その他製品"),
+]
+
 
 def fetch_jp(n_small: int) -> pd.DataFrame:
     print("JPX上場銘柄一覧をダウンロード中…")
@@ -74,8 +80,9 @@ def fetch_us() -> pd.DataFrame:
 def main() -> None:
     n_small = int(sys.argv[1]) if len(sys.argv) > 1 else 100
 
-    out = pd.concat([fetch_jp(n_small), fetch_us()], ignore_index=True)
-    out = out.drop_duplicates(subset="symbol")
+    extra = pd.DataFrame(EXTRA, columns=["symbol", "name", "group", "sector"])
+    out = pd.concat([fetch_jp(n_small), extra, fetch_us()], ignore_index=True)
+    out = out.drop_duplicates(subset="symbol")  # 公式リストに載っていればそちらを優先
 
     OUT.parent.mkdir(parents=True, exist_ok=True)
     out.to_csv(OUT, index=False, encoding="utf-8-sig")

@@ -12,10 +12,13 @@ import streamlit as st
 from PIL import Image
 from plotly.subplots import make_subplots
 
-from chart_extract import extract_series_from_image
+from chart_extract import extract_series_detailed, render_overlay
 from forecast import forecast_next_week
 from pattern_match import WINDOW_BY_SPAN, build_library, find_similar
+from search import filter_df
 from tickers import TICKERS
+
+SEARCH_PLACEHOLDER = "コード・社名・業種（例: 8022 / ミズノ / 銀行 / apple）"
 
 BASE_DIR = Path(__file__).parent
 PROCESSED_DIR = BASE_DIR / "data" / "processed"
@@ -51,7 +54,7 @@ def get_forecast(symbol: str) -> pd.DataFrame:
 def page_pattern(summary: pd.DataFrame) -> None:
     """パターン照合ページ: チャートの形に似た過去局面を探し、その後の推移を確率で示す。"""
     st.subheader("🔮 パターン照合 — 「この形のあと、過去はどう動いたか」")
-    st.caption("入力したチャートの形に似ている局面を過去5年×300社の全履歴から探し、"
+    st.caption("入力したチャートの形に似ている局面を過去5年×全銘柄の履歴から探し、"
                "その後20営業日の値動きを頻度分布として集計します。過去の頻度であり、将来の保証ではありません。")
 
     c1, c2 = st.columns([1, 1])
@@ -69,22 +72,56 @@ def page_pattern(summary: pd.DataFrame) -> None:
                     "余計な文字が少なく、チャート本体が大きく写っているほど精度が上がります。")
             return
         img = Image.open(up)
-        query = extract_series_from_image(img, n_points=window)
+
+        # 自動のパネル検出が外れたとき用の手動トリミング（写真・複雑な画面向け）
+        with st.expander("✂️ うまく読めないときは範囲を手動で指定"):
+            st.caption("チャート本体だけが枠内に入るように調整してください（%指定）")
+            tc1, tc2 = st.columns(2)
+            x_range = tc1.slider("横方向", 0, 100, (0, 100), key="crop_x")
+            y_range = tc2.slider("縦方向", 0, 100, (0, 100), key="crop_y")
+        if x_range != (0, 100) or y_range != (0, 100):
+            w, h = img.size
+            img = img.crop((int(w * x_range[0] / 100), int(h * y_range[0] / 100),
+                            max(1, int(w * x_range[1] / 100)), max(1, int(h * y_range[1] / 100))))
+
+        detail = extract_series_detailed(img, n_points=window)
+        query = None if detail is None else detail["values"]
         ic1, ic2 = st.columns(2)
         with ic1:
-            st.image(img, caption="アップロードされた画像", use_container_width=True)
+            if detail is None:
+                st.image(img, caption="アップロードされた画像", use_container_width=True)
+            else:
+                st.image(render_overlay(img, detail),
+                         caption="青枠=価格パネルとして検出した範囲 / 赤線=読み取った価格",
+                         use_container_width=True)
         with ic2:
             if query is None:
-                st.error("チャートの線をうまく抽出できませんでした。トリミングして本体だけにした画像で再度お試しください。")
+                st.error("チャートの線をうまく抽出できませんでした。"
+                         "上の「範囲を手動で指定」でチャート本体だけを囲うか、"
+                         "トリミングした画像で再度お試しください。")
                 return
+            kind_label = "ローソク足" if detail["kind"] == "candle" else "折れ線"
             fig_q = go.Figure(go.Scatter(y=query, mode="lines", line=dict(color="#e07030", width=2)))
-            fig_q.update_layout(title="抽出した形状（これで照合します）", height=260,
+            fig_q.update_layout(title=f"抽出した形状（{kind_label}として読み取り）", height=260,
                                 margin=dict(t=40, b=10, l=10, r=10),
                                 xaxis_visible=False, yaxis_visible=False)
             st.plotly_chart(fig_q, use_container_width=True)
-        st.caption("↑ 右の形が元チャートと合っていることを確認してから、下の結果を見てください。")
+            conf = detail["confidence"]
+            st.progress(conf, text=f"読み取りの信頼度 {conf * 100:.0f}%")
+        if detail["confidence"] < 0.6:
+            st.warning("読み取りの信頼度が低めです。左の赤線が元チャートの動きと合っているか確認し、"
+                       "ずれていれば範囲を手動で指定し直してください。")
+        st.caption("↑ 左の赤線が元チャートの線となぞれているかを確認してから、下の結果を見てください。")
     else:
-        options = summary["symbol"] + "  " + summary["name"]
+        q = st.text_input("🔍 検索", placeholder=SEARCH_PLACEHOLDER, key="pattern_search")
+        pool = filter_df(summary, q)
+        if q.strip():
+            st.caption(f"{len(pool)}件が該当")
+        if pool.empty:
+            st.warning("該当する銘柄がありません。検索語を変えてお試しください。")
+            return
+
+        options = pool["symbol"] + "  " + pool["name"]
         choice = st.selectbox("銘柄（直近の形を照合パターンとして使う）", options.tolist())
         symbol = choice.split()[0]
         df = load_stock(symbol)
@@ -188,20 +225,31 @@ def main() -> None:
     # ---- サイドバー: 銘柄選択 ----
     with st.sidebar:
         st.header("銘柄選択")
+        q = st.text_input("🔍 検索", placeholder=SEARCH_PLACEHOLDER, key="symbol_search")
+        pool = filter_df(summary, q)  # 検索 → 区分 → 業種 の順に絞り込む
+        if q.strip():
+            st.caption(f"{len(pool)}件が該当")
+        if pool.empty:
+            st.warning("該当する銘柄がありません。検索語を変えてお試しください。")
+            return
+
         group = st.radio("区分", ["すべて", "日本株", "米国株(S&P500)",
                                   "大型株(TOPIX100)", "中型株(Mid400)", "小型株"], index=0)
         group_map = {"大型株(TOPIX100)": "large", "中型株(Mid400)": "mid",
                      "小型株": "small", "米国株(S&P500)": "us"}
-        pool = summary
         if group == "日本株":
-            pool = summary[summary["group"].isin(["large", "mid", "small"])]
+            pool = pool[pool["group"].isin(["large", "mid", "small"])]
         elif group in group_map:
-            pool = summary[summary["group"] == group_map[group]]
+            pool = pool[pool["group"] == group_map[group]]
 
         sectors = ["すべて"] + sorted(pool["sector"].unique())
         sector = st.selectbox("業種", sectors)
         if sector != "すべて":
             pool = pool[pool["sector"] == sector]
+
+        if pool.empty:
+            st.warning("該当する銘柄がありません。検索語・区分・業種を見直してください。")
+            return
 
         options = pool["symbol"] + "  " + pool["name"]
         choice = st.selectbox("銘柄", options.tolist())

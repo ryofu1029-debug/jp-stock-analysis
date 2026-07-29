@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """パターン照合エンジン: 与えられた価格の「形」に似た過去の局面を
-300社×5年の全履歴から探し、その後の値動きを確率・分布として集計する。
+全銘柄×5年の全履歴から探し、その後の値動きを確率・分布として集計する。
 
 手法: 形状をzスコア正規化し、ピアソン相関で類似度を測る k近傍方式。
 「過去に似た形のあと、20営業日でどう動いたか」の頻度分布を返す。
@@ -29,14 +29,22 @@ def _zscore(w: np.ndarray) -> np.ndarray | None:
     return (w - w.mean()) / std
 
 
-def build_library(window: int = 60) -> dict:
-    """全銘柄の過去データから照合用ライブラリ（窓と「その後」）を構築する。"""
+def build_library(window: int = 60, symbols: tuple[str, ...] | None = None,
+                  step: int | None = None) -> dict:
+    """過去データから照合用ライブラリ（窓と「その後」）を構築する。
+
+    symbols を指定すると、その銘柄だけでライブラリを作る（自己照合モード用）。
+    銘柄を絞ると窓数が激減するため step を1にして窓を密に取るとよい。
+    """
+    step = step or STEP
     X, fut, syms, dates = [], [], [], []
-    for csv in sorted(PROCESSED_DIR.glob("*.csv")):
+    files = (sorted(PROCESSED_DIR / f"{s}.csv" for s in symbols)
+             if symbols else sorted(PROCESSED_DIR.glob("*.csv")))
+    for csv in files:
         close = pd.read_csv(csv, usecols=["Date", "Close"], parse_dates=["Date"])
         c = close["Close"].to_numpy(dtype=np.float32)
         d = close["Date"].dt.strftime("%Y-%m-%d").to_numpy()
-        for end in range(window, len(c) - HORIZON, STEP):
+        for end in range(window, len(c) - HORIZON, step):
             z = _zscore(c[end - window:end])
             if z is None:
                 continue
@@ -50,10 +58,12 @@ def build_library(window: int = 60) -> dict:
         "syms": np.array(syms),
         "dates": np.array(dates),
         "window": window,
+        "step": step,
     }
 
 
-def find_similar(query: np.ndarray, lib: dict, k: int = 100) -> dict | None:
+def find_similar(query: np.ndarray, lib: dict, k: int = 100,
+                 min_matches: int = 10) -> dict | None:
     """query の形に似た過去の局面 top-k を探し、その後の統計を返す。"""
     window = lib["window"]
     if len(query) != window:
@@ -68,7 +78,7 @@ def find_similar(query: np.ndarray, lib: dict, k: int = 100) -> dict | None:
     # 類似度順に、同一銘柄の重なり合う窓を除外しながら k 件選ぶ
     order = np.argsort(sims)[::-1]
     chosen, used = [], {}
-    min_gap = max(1, window // (2 * STEP))  # 窓インデックスの最小間隔
+    min_gap = max(1, window // (2 * lib.get("step", STEP)))  # 窓インデックスの最小間隔
     for i in order:
         s = lib["syms"][i]
         if all(abs(i - j) >= min_gap for j in used.get(s, [])):
@@ -76,7 +86,7 @@ def find_similar(query: np.ndarray, lib: dict, k: int = 100) -> dict | None:
             used.setdefault(s, []).append(i)
         if len(chosen) >= k:
             break
-    if len(chosen) < 10:
+    if len(chosen) < min_matches:
         return None
 
     fut = lib["fut"][chosen]          # (k, HORIZON) その後の累積リターン
