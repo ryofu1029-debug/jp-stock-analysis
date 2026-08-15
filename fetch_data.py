@@ -34,6 +34,10 @@ def save_one(symbol: str, df: pd.DataFrame) -> bool:
     if len(df) < 100:  # 5年分なら約1200行あるはず。極端に少ないのはデータ不良
         return False
     df = df[["Open", "High", "Low", "Close", "Volume"]].round(2)
+    if df.index.tz is not None:
+        # 米国ADR等はtz付きインデックス(夏時間でoffsetが変わる)。
+        # tz付きのまま保存すると読み込み時にmixed timezonesエラーになるためtz-naive化する。
+        df.index = df.index.tz_localize(None)
     df.index.name = "Date"
     df.to_csv(RAW_DIR / f"{symbol}.csv", encoding="utf-8")
     return True
