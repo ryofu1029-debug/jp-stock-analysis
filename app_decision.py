@@ -6,6 +6,7 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
+import yfinance as yf
 from PIL import Image
 from plotly.subplots import make_subplots
 
@@ -59,7 +60,25 @@ def load_summary() -> pd.DataFrame:
 
 @st.cache_data(ttl=3600)
 def load_stock(symbol: str) -> pd.DataFrame:
-    return pd.read_csv(PROCESSED_DIR / f"{symbol}.csv", index_col="Date", parse_dates=True)
+    """保存済み履歴に直近のYahoo Financeデータを結合する。
+
+    外部取得に失敗した場合も、保存済みCSVへ安全にフォールバックする。
+    """
+    stored = pd.read_csv(PROCESSED_DIR / f"{symbol}.csv", index_col="Date", parse_dates=True)
+    ohlcv = ["Open", "High", "Low", "Close", "Volume"]
+    try:
+        recent = yf.Ticker(symbol).history(period="3mo", interval="1d", auto_adjust=True)
+        if recent.empty:
+            return stored
+        if recent.index.tz is not None:
+            recent.index = recent.index.tz_localize(None)
+        recent.index = pd.to_datetime(recent.index).normalize()
+        recent = recent[ohlcv].apply(pd.to_numeric, errors="coerce").dropna(subset=["Close"])
+        combined = pd.concat([stored[ohlcv], recent])
+        combined = combined[~combined.index.duplicated(keep="last")].sort_index()
+        return add_all_indicators(combined)
+    except Exception:
+        return stored
 
 
 @st.cache_resource(show_spinner="過去の類似パターンを準備しています…")
@@ -237,6 +256,16 @@ def render_analysis(symbol: str, timeframe: str, span: str, horizon: int, k: int
     cfg = timeframe_config(timeframe)
     window = cfg["spans"][span]
     df = load_stock(symbol)
+    last_date = pd.Timestamp(df.index.max()).date()
+    age_days = (pd.Timestamp.now(tz="Asia/Tokyo").date() - last_date).days
+    st.caption(
+        f"株価データ基準日：{last_date:%Y年%m月%d日} ｜ "
+        "表示銘柄はYahoo Financeから最大1時間ごとに更新"
+    )
+    if age_days > 5:
+        st.warning(
+            f"株価データが{age_days}日間更新されていません。外部データ取得の一時的な失敗が考えられます。"
+        )
     query = prepare_close(df, timeframe)
     if len(query) < window:
         st.error("選択期間に必要な株価データが足りません。分析期間を短くしてください。")
